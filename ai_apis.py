@@ -31,11 +31,24 @@ import whisper
 # Load environment variables
 load_dotenv()
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Document and Video QA API",
     description="This API allows you to load PDFs, transcriptions, and Google Docs and query them using LangChain and FAISS",
     version="1.0.0"
 )
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins, but you can specify specific domains
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
+
+
 
 # Example dictionary with topics and YouTube URLs
 TOPICS_YOUTUBE_URLS = {
