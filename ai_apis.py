@@ -289,3 +289,7 @@ def query_pgvector(query: str, session_id: str = Query(default="0")):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7000)
+
+
+    # scp -i ~/Downloads/mtx_ai.pem -r /home/prixite/Documents/mtx-realty-chatbot/drive_documents ubuntu@18.218.37.228:/ai.mtxrealty-backend/
+
