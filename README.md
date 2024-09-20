@@ -6,3 +6,5 @@
     source .venv/bin/activate
 3. Install dependencies using the command: 
     pip install -r requirements.txt
+4. Run the code using the command: 
+    python3 ai_apis.py and visit the url provided/docs to see the apis
