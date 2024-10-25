@@ -22,6 +22,8 @@ from langchain.memory import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pathlib import Path
+from scipy.spatial.distance import cosine
+from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 import shutil
@@ -80,6 +82,26 @@ api_key = os.getenv("api_key")
 # Initialize OpenAI embeddings
 embeddings = OpenAIEmbeddings(model='text-embedding-ada-002', openai_api_key=api_key)
 
+question_answer_pairs = {}
+
+# Define the input model for the question-answer endpoint
+class QuestionAnswerInput(BaseModel):
+    question: str
+    answer: str
+
+# Endpoint to add question-answer pairs to the dictionary
+@app.post("/add_question_answers/")
+def add_question_answers(input_data: QuestionAnswerInput):
+    question = input_data.question.strip()
+    answer = input_data.answer.strip()
+
+    # Check if the question already exists in the dictionary
+    if question in question_answer_pairs:
+        raise HTTPException(status_code=400, detail="Question already exists.")
+
+    # Add the question-answer pair to the dictionary
+    question_answer_pairs[question] = answer
+    return {"message": "Question-answer pair added successfully.", "question": question, "answer": answer}
 # Initialize FAISS vector store
 def initialize_vector_store(documents):
     global store
@@ -206,14 +228,50 @@ def transcribe_all_videos():
         "transcriptions": transcriptions
     }
 
+from scipy.spatial.distance import cosine
+
 @app.get("/query/")
 def query_pgvector(query: str, session_id: str = Query(default="0")):
     if store is None:
         raise HTTPException(status_code=500, detail="Vector store is not initialized. Load PDFs first.")
 
-    llm = ChatOpenAI(api_key=os.getenv("api_key"), model_name="gpt-4-turbo", temperature=0)
+    # Embedding for the query
+    query_embedding = embeddings.embed_query(query)
 
-    # Define the prompts for the retrieval and QA chain
+    # Step 1: Check the question-answer dictionary for a matching or similar question
+    threshold = 0.8  # 80% similarity threshold
+    max_similarity = 0
+    best_match = None
+
+    for question, answer in question_answer_pairs.items():
+        question_embedding = embeddings.embed_query(question)
+        similarity = 1 - cosine(query_embedding, question_embedding)
+
+        if similarity > max_similarity:
+            max_similarity = similarity
+            best_match = (question, answer)
+
+    # If a similar question is found in the dictionary, return its answer and fetch YouTube URL if needed
+    if max_similarity >= threshold and best_match:
+        question, answer = best_match
+        # Check if there's a relevant YouTube topic
+        youtube_url = None
+        for topic, topic_url in TOPICS_YOUTUBE_URLS.items():
+            topic_embedding = embeddings.embed_query(topic)
+            topic_similarity = 1 - cosine(query_embedding, topic_embedding)
+            if topic_similarity >= threshold:
+                youtube_url = topic_url
+                break
+
+        return {
+            "query": query,
+            "similar_question": question,
+            "answer": answer,
+            "youtube_url": youtube_url
+        }
+
+    # Step 2: If no matching question, proceed with RAG chain for answer generation
+    llm = ChatOpenAI(api_key=os.getenv("api_key"), model_name="gpt-4-turbo", temperature=0)
     contextualize_q_system_prompt = (
         "Given a chat history and the latest user question "
         "which might reference context in the chat history, "
@@ -277,20 +335,14 @@ def query_pgvector(query: str, session_id: str = Query(default="0")):
         config={"configurable": {"session_id": session_id}}
     )
 
-    # Check for semantic similarity with YouTube topics
-    query_embedding = embeddings.embed_query(query)
-    topic_embeddings = {topic: embeddings.embed_query(topic) for topic in TOPICS_YOUTUBE_URLS.keys()}
-    
-    # Find the most similar topic
-    similar_topic = None
-    max_similarity = -1
-    for topic, topic_embedding in topic_embeddings.items():
-        similarity = sum(query_embedding[i] * topic_embedding[i] for i in range(len(query_embedding)))
-        if similarity > max_similarity:
-            max_similarity = similarity
-            similar_topic = topic
-
-    youtube_url = TOPICS_YOUTUBE_URLS.get(similar_topic)
+    # Check for YouTube URL based on similarity with topics
+    youtube_url = None
+    for topic, topic_url in TOPICS_YOUTUBE_URLS.items():
+        topic_embedding = embeddings.embed_query(topic)
+        topic_similarity = 1 - cosine(query_embedding, topic_embedding)
+        if topic_similarity >= threshold:
+            youtube_url = topic_url
+            break
 
     return {
         "query": query,
@@ -298,6 +350,7 @@ def query_pgvector(query: str, session_id: str = Query(default="0")):
         "answer": result["answer"],
         "youtube_url": youtube_url
     }
+
 
 if __name__ == "__main__":
     import uvicorn
